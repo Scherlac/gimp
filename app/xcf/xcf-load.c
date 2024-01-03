@@ -1066,7 +1066,8 @@ xcf_load_add_effects (XcfInfo   *info,
 
       if (effects_nodes)
         {
-          GList *iter;
+          GList    *iter;
+          gboolean  missing_filters = FALSE;
 
           for (iter = effects_nodes; iter; iter = iter->next)
             {
@@ -1082,32 +1083,51 @@ xcf_load_add_effects (XcfInfo   *info,
                 {
                   GimpDrawableFilter *filter = NULL;
                   GeglNode           *op;
+                  const gchar        *op_class;
 
                   op = g_object_ref (children->data);
                   gegl_node_remove_child (data->operation, op);
-                  filter = gimp_drawable_filter_new (GIMP_DRAWABLE (layer),
-                                                     data->name, op,
-                                                     data->icon_name);
 
-                  gimp_drawable_filter_set_opacity (filter, data->opacity);
-                  gimp_drawable_filter_set_mode (filter, data->paint_mode,
-                                                 data->blend_space,
-                                                 data->composite_space,
-                                                 data->composite_mode);
-                  gimp_drawable_filter_set_region (filter, data->region);
+                  /* Verify we have this GEGL operation (or plug-in)
+                   * installed */
+                  gegl_node_get (op,
+                                 "operation", &op_class,
+                                 NULL);
+                  if (g_strcmp0 (op_class, "gegl:nop") != 0)
+                    {
+                      filter = gimp_drawable_filter_new (GIMP_DRAWABLE (layer),
+                                                         data->name, op,
+                                                         data->icon_name);
 
-                  gimp_drawable_filter_apply (filter, NULL);
+                      gimp_drawable_filter_set_opacity (filter, data->opacity);
+                      gimp_drawable_filter_set_mode (filter, data->paint_mode,
+                                                     data->blend_space,
+                                                     data->composite_space,
+                                                     data->composite_mode);
+                      gimp_drawable_filter_set_region (filter, data->region);
 
-                  g_object_set (filter,
-                                "mask", data->mask,
-                                NULL);
+                      gimp_drawable_filter_apply (filter, NULL);
 
-                  gimp_drawable_filter_commit (filter, TRUE, NULL, FALSE);
+                      g_object_set (filter,
+                                    "mask", data->mask,
+                                    NULL);
 
-                  gimp_drawable_filter_layer_mask_freeze (filter);
+                      gimp_drawable_filter_commit (filter, TRUE, NULL, FALSE);
 
-                  g_object_unref (op);
-                  g_object_unref (filter);
+                      gimp_drawable_filter_layer_mask_freeze (filter);
+
+                      g_object_unref (op);
+                      g_object_unref (filter);
+                    }
+                  else if (! missing_filters)
+                    {
+                      missing_filters = TRUE;
+
+                      gimp_message (info->gimp, G_OBJECT (info->progress),
+                                    GIMP_MESSAGE_WARNING,
+                                    "XCF Warning: failed loading some third-party "
+                                    "filters not installed on this device.");
+                    }
                 }
               else
                 {
@@ -2687,9 +2707,11 @@ xcf_load_layer (XcfInfo    *info,
   gboolean           show_mask  = FALSE;
   GList             *selected;
   GList             *linked;
+  GList             *filter_data_list = NULL;
   gboolean           floating;
   guint32            group_layer_flags = 0;
   guint32            text_layer_flags = 0;
+  gint               filter_count = 0;
   gint               width;
   gint               height;
   gint               type;
@@ -2914,12 +2936,15 @@ xcf_load_layer (XcfInfo    *info,
       g_object_set_data (G_OBJECT (layer), "gimp-layer-mask-show",
                          GINT_TO_POINTER (show_mask));
     }
+  else
+    {
+      /* If no layer mask, move ahead to layer effects */
+      cur_offset += info->bytes_per_offset;
+    }
 
   /* read in any layer effects and effect masks */
   while (effects_offset != 0)
     {
-      GList      *filter_data_list = NULL;
-      gint        filter_count     = 0;
       FilterData *filter_data;
 
       if (effects_offset < cur_offset)
@@ -2953,11 +2978,11 @@ xcf_load_layer (XcfInfo    *info,
 
       /* read in the offset of the next effect */
       xcf_read_offset (info, &effects_offset, 1);
-
-      if (filter_count > 0)
-        g_object_set_data_full (G_OBJECT (layer), "gimp-layer-effects", filter_data_list,
-                                (GDestroyNotify) xcf_load_free_effects);
     }
+
+  if (filter_count > 0)
+    g_object_set_data_full (G_OBJECT (layer), "gimp-layer-effects", filter_data_list,
+                            (GDestroyNotify) xcf_load_free_effects);
 
   /* attach the floating selection... */
   if (is_fs_drawable)

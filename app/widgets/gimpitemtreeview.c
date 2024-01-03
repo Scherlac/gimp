@@ -2206,14 +2206,25 @@ static void
 gimp_item_tree_view_effects_edited_clicked (GtkWidget        *widget,
                                             GimpItemTreeView *view)
 {
+  GimpImage *image     = view->priv->image;
+  GList     *drawables = gimp_image_get_selected_drawables (image);
+
+  /* TODO: Revisit when we can apply filters to multiple layers */
+  if (g_list_length (drawables) != 1)
+    {
+      g_warning (_("Cannot modify multiple drawables. Select only one."));
+      g_list_free (drawables);
+      return;
+    }
+  g_list_free (drawables);
+
   if (! view->priv->effects_filter ||
       ! GIMP_IS_DRAWABLE_FILTER (view->priv->effects_filter))
     return;
 
   if (view->priv->effects_drawable)
     {
-      GimpImage *image = view->priv->image;
-      GeglNode  *op    = gimp_drawable_filter_get_operation (view->priv->effects_filter);
+      GeglNode  *op = gimp_drawable_filter_get_operation (view->priv->effects_filter);
 
       if (op)
         {
